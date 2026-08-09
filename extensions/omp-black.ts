@@ -3,7 +3,6 @@ import { VERSION } from "@oh-my-pi/pi-coding-agent";
 import {
 	adjustOmpClaudeCodePayload,
 	CLAUDE_CODE_USER_AGENT,
-	CLAUDE_CODE_VERSION,
 	discoverClaudeCodeIdentity,
 	isSupportedOmpVersion,
 	SUPPORTED_OMP_MIN_VERSION,
@@ -44,11 +43,4 @@ export default function ompBlack(pi: ExtensionAPI): void {
 		return adjustOmpClaudeCodePayload(event.payload, identity);
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
-		const identity = await identityPromise;
-		ctx.ui.setStatus(
-			"omp-black",
-			`omp-black cc${CLAUDE_CODE_VERSION}${identity ? "+id" : ""}`,
-		);
-	});
 }
