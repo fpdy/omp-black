@@ -52,6 +52,6 @@ Tests use fake transports only. They never make provider requests and require no
 
 This project is unofficial and is not affiliated with or endorsed by Anthropic or the Oh My Pi project. Users must provide their own valid account credentials and determine whether use complies with applicable service terms. The compatibility mechanism is version-specific and must be revalidated when Claude Code or OMP changes.
 
-No OAuth tokens, identifiers, captures, or private Claude state are included in the package. Distributed under the MIT license; see [`LICENSE`](LICENSE).
+No OAuth tokens, identifiers, captures, or private Claude state are included in the package. Distributed under the MIT license; see [`LICENSE`](LICENSE). Security reporting and secret-handling notes are in [`SECURITY.md`](SECURITY.md).
 
 The retained `patches/`, `install.sh`, and binary build scripts under this repository are a legacy Pi 0.84.1 standalone path and are **not** used by the OMP plugin.
