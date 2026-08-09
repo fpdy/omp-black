@@ -1,13 +1,14 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Context, Message } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Message } from "@oh-my-pi/pi-ai";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+	adjustOmpClaudeCodePayload,
 	buildClaudeCodeBillingHeader,
 	claudeCodeVersionFingerprint,
-	createClaudeCodeFetch,
 	discoverClaudeCodeIdentity,
+	isSupportedOmpVersion,
 	parseClaudeCodeIdentity,
 	patchClaudeCodeCch,
 	transformClaudeCodePayload,
@@ -19,9 +20,6 @@ const temporaryDirectories: string[] = [];
 const promptMessages = (prompt: string): Message[] => [
 	{ role: "user", content: prompt, timestamp: 1 },
 ];
-const context = (prompt: string): Context => ({
-	messages: promptMessages(prompt),
-});
 const deviceId = "f".repeat(64);
 const accountUuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
@@ -57,7 +55,7 @@ describe("Claude Code protocol", () => {
 	});
 
 	it("discovers and validates identity from Claude Code state without exposing it", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-black-"));
+		const root = await mkdtemp(join(tmpdir(), "omp-black-"));
 		temporaryDirectories.push(root);
 		const path = join(root, ".claude.json");
 		await writeFile(
@@ -93,7 +91,7 @@ describe("Claude Code protocol", () => {
 					},
 				],
 			},
-			context("Reply with exactly: PROBE_OK"),
+			promptMessages("Reply with exactly: PROBE_OK"),
 			"11111111-2222-4333-8444-555555555555",
 			{ deviceId, accountUuid },
 		);
@@ -120,7 +118,7 @@ describe("Claude Code protocol", () => {
 		});
 	});
 
-	it("does not duplicate blocks when the retained source patch is also present", async () => {
+	it("does not duplicate blocks when already transformed", async () => {
 		const first = await transformClaudeCodePayload(
 			{
 				model: "claude-opus-5",
@@ -129,13 +127,13 @@ describe("Claude Code protocol", () => {
 				stream: true,
 				system: [{ type: "text", text: "Pi system" }],
 			},
-			context("hello"),
+			promptMessages("hello"),
 			undefined,
 			undefined,
 		);
 		const second = await transformClaudeCodePayload(
 			first,
-			context("hello"),
+			promptMessages("hello"),
 			undefined,
 			undefined,
 		);
@@ -145,7 +143,7 @@ describe("Claude Code protocol", () => {
 	it("omits identity metadata when Claude Code state is unavailable", async () => {
 		const payload = await transformClaudeCodePayload(
 			{ model: "claude-opus-5", messages: [], max_tokens: 1, stream: true },
-			context("hello"),
+			promptMessages("hello"),
 			"11111111-2222-4333-8444-555555555555",
 			undefined,
 		);
@@ -212,35 +210,94 @@ describe("Claude Code protocol", () => {
 		expect(patchClaudeCodeCch(body)).toBe(body);
 	});
 
-	it("patches the final SDK body and generates a request UUID", async () => {
-		const body = JSON.stringify({
-			model: "claude-opus-5",
-			messages: [],
-			max_tokens: 1,
+	it("accepts supported OMP versions and rejects other majors", () => {
+		expect(isSupportedOmpVersion("17.2.12")).toBe(true);
+		expect(isSupportedOmpVersion("17.3.0")).toBe(true);
+		expect(isSupportedOmpVersion("17.2.11")).toBe(false);
+		expect(isSupportedOmpVersion("16.9.9")).toBe(false);
+		expect(isSupportedOmpVersion("18.0.0")).toBe(false);
+	});
+});
+
+describe("OMP payload adjuster", () => {
+	it("rewrites Cowork billing text to SDK-CLI without touching structure", async () => {
+		const payload = {
+			model: "claude-sonnet-4-5",
+			messages: [
+				{ role: "user", content: "Reply with exactly: PROBE_OK" },
+			],
+			max_tokens: 1024,
 			stream: true,
 			system: [
 				{
 					type: "text",
-					text: "x-anthropic-billing-header: cc_version=2.1.224.000; cc_entrypoint=sdk-cli; cch=00000;",
+					text: "x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=claude-desktop; cch=00000;",
+				},
+				{
+					type: "text",
+					text: "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+				},
+				{ type: "text", text: "OMP system", cache_control: { type: "ephemeral" } },
+			],
+			metadata: {
+				user_id: JSON.stringify({
+					device_id: "a".repeat(64),
+					session_id: "11111111-2222-4333-8444-555555555555",
+				}),
+			},
+		};
+
+		const adjusted = (await adjustOmpClaudeCodePayload(payload, {
+			deviceId,
+			accountUuid,
+		})) as typeof payload;
+
+		expect(adjusted.system[0].text).toBe(
+			"x-anthropic-billing-header: cc_version=2.1.224.f97; cc_entrypoint=sdk-cli; cch=00000;",
+		);
+		expect(adjusted.system[1]).toEqual(payload.system[1]);
+		expect(adjusted.system[2]).toEqual(payload.system[2]);
+		expect(adjusted.metadata.user_id).toBe(
+			JSON.stringify({
+				device_id: deviceId,
+				account_uuid: accountUuid,
+				session_id: "11111111-2222-4333-8444-555555555555",
+			}),
+		);
+	});
+
+	it("leaves API-key payloads unchanged", async () => {
+		const payload = {
+			model: "claude-sonnet-4-5",
+			messages: [{ role: "user", content: "hi" }],
+			max_tokens: 16,
+			system: [{ type: "text", text: "plain system" }],
+		};
+		const adjusted = await adjustOmpClaudeCodePayload(payload, {
+			deviceId,
+			accountUuid,
+		});
+		expect(adjusted).toBe(payload);
+		expect(adjusted).toEqual(payload);
+	});
+
+	it("keeps cch placeholder so host attestor can still patch", async () => {
+		const payload = {
+			model: "claude-sonnet-4-5",
+			messages: [{ role: "user", content: "hello world" }],
+			max_tokens: 16,
+			system: [
+				{
+					type: "text",
+					text: "x-anthropic-billing-header: cc_version=2.1.220.000; cc_entrypoint=claude-desktop; cch=00000;",
 				},
 			],
-		});
-		const transport = vi.fn<typeof fetch>(
-			async () => new Response(null, { status: 200 }),
-		);
-		await createClaudeCodeFetch(transport)(
-			"https://api.anthropic.com/v1/messages",
-			{
-				method: "POST",
-				headers: { authorization: "Bearer secret" },
-				body,
-			},
-		);
-
-		const [, init] = transport.mock.calls[0];
-		expect(String(init?.body)).toMatch(/cch=[0-9a-f]{5}/u);
-		const headers = new Headers(init?.headers);
-		expect(headers.get("x-client-request-id")).toMatch(/^[0-9a-f-]{36}$/u);
-		expect(headers.get("authorization")).toBe("Bearer secret");
+		};
+		const adjusted = (await adjustOmpClaudeCodePayload(
+			payload,
+			undefined,
+		)) as typeof payload;
+		expect(adjusted.system[0].text).toContain("cch=00000");
+		expect(adjusted.system[0].text).toContain("cc_entrypoint=sdk-cli");
 	});
 });

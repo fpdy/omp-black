@@ -1,17 +1,23 @@
 {
-  "name": "pi-black",
+  "name": "omp-black",
   "version": "0.1.0",
-  "description": "Claude Code wire compatibility for Pi",
+  "description": "Claude Code subscription wire compatibility for Oh My Pi",
   "type": "module",
   "license": "MIT",
   "private": true,
   "keywords": [
-    "pi-package",
-    "pi-extension"
+    "omp-plugin",
+    "pi-extension",
+    "pi-package"
   ],
+  "omp": {
+    "extensions": [
+      "./extensions/omp-black.ts"
+    ]
+  },
   "pi": {
     "extensions": [
-      "./extensions/pi-black.ts"
+      "./extensions/omp-black.ts"
     ]
   },
   "scripts": {
@@ -19,12 +25,12 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "0.84.1",
-    "@earendil-works/pi-coding-agent": "0.84.1"
+    "@oh-my-pi/pi-ai": ">=17.2.12",
+    "@oh-my-pi/pi-coding-agent": ">=17.2.12"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.1",
-    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@oh-my-pi/pi-ai": "17.2.12",
+    "@oh-my-pi/pi-coding-agent": "17.2.12",
     "@types/node": "24.12.4",
     "typescript": "5.9.3",
     "vitest": "4.1.9"

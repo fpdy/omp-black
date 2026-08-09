@@ -1,17 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type {
-	Context,
-	FetchFunction,
-	Message,
-	ProviderHeaders,
-	StreamOptions,
-} from "@earendil-works/pi-ai";
+import type { Message } from "@oh-my-pi/pi-ai";
 
-export const SUPPORTED_PI_VERSION = "0.84.1";
+/** Claude Code CLI version whose request shape this package targets. */
 export const CLAUDE_CODE_VERSION = "2.1.224";
 export const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
+export const CLAUDE_CODE_USER_AGENT =
+	`claude-cli/${CLAUDE_CODE_VERSION} (external, ${CLAUDE_CODE_ENTRYPOINT})`;
+
+/** Soft-compat floor for the host OMP coding-agent. */
+export const SUPPORTED_OMP_MAJOR = 17;
+export const SUPPORTED_OMP_MIN_VERSION = "17.2.12";
 
 const CCH_PLACEHOLDER = "cch=00000";
 const CCH_SEED = 0x4d659218e32a3268n;
@@ -21,6 +21,7 @@ const PRIME64_2 = 0xc2b2ae3d27d4eb4fn;
 const PRIME64_3 = 0x165667b19e3779f9n;
 const PRIME64_4 = 0x85ebca77c2b2ae63n;
 const PRIME64_5 = 0x27d4eb2f165667c5n;
+const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 const AGENT_SDK_SYSTEM_PROMPT =
 	"You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 const LEGACY_PI_OAUTH_SYSTEM_PROMPT =
@@ -67,6 +68,7 @@ function mergeRound(accumulator: bigint, value: bigint): bigint {
 	return ((accumulator ^ round(0n, value)) * PRIME64_1 + PRIME64_4) & MASK_64;
 }
 
+/** Portable XXH64 used by Claude Code's native request serializer. */
 export function xxHash64(bytes: Uint8Array, seed = 0n): bigint {
 	let offset = 0;
 	let hash: bigint;
@@ -144,6 +146,12 @@ export async function claudeCodeVersionFingerprint(
 	messages: Message[],
 ): Promise<string> {
 	const prompt = firstUserPrompt(messages);
+	return claudeCodeVersionFingerprintFromPrompt(prompt);
+}
+
+export async function claudeCodeVersionFingerprintFromPrompt(
+	prompt: string,
+): Promise<string> {
 	const selected = [4, 7, 20].map((index) => prompt[index] || "0").join("");
 	const input = new TextEncoder().encode(
 		`59cf53e54c78${selected}${CLAUDE_CODE_VERSION}`,
@@ -155,8 +163,14 @@ export async function claudeCodeVersionFingerprint(
 export async function buildClaudeCodeBillingHeader(
 	messages: Message[],
 ): Promise<string> {
-	const fingerprint = await claudeCodeVersionFingerprint(messages);
-	return `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${fingerprint}; cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT}; ${CCH_PLACEHOLDER};`;
+	return buildClaudeCodeBillingHeaderFromPrompt(firstUserPrompt(messages));
+}
+
+export async function buildClaudeCodeBillingHeaderFromPrompt(
+	prompt: string,
+): Promise<string> {
+	const fingerprint = await claudeCodeVersionFingerprintFromPrompt(prompt);
+	return `${BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${fingerprint}; cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT}; ${CCH_PLACEHOLDER};`;
 }
 
 export function parseClaudeCodeIdentity(
@@ -185,16 +199,6 @@ export async function discoverClaudeCodeIdentity(
 	env: NodeJS.ProcessEnv = process.env,
 	configPath?: string,
 ): Promise<ClaudeCodeIdentity | undefined> {
-	const deviceId = env.CLAUDE_CODE_DEVICE_ID;
-	const accountUuid = env.CLAUDE_CODE_ACCOUNT_UUID;
-	if (deviceId && accountUuid) {
-		const fromEnvironment = parseClaudeCodeIdentity({
-			userID: deviceId,
-			oauthAccount: { accountUuid },
-		});
-		if (fromEnvironment) return fromEnvironment;
-	}
-
 	const path =
 		configPath ?? join(env.CLAUDE_CONFIG_DIR || homedir(), ".claude.json");
 	try {
@@ -204,14 +208,104 @@ export async function discoverClaudeCodeIdentity(
 	}
 }
 
+function firstUserPromptFromPayload(payload: JsonObject): string {
+	const messages = payload.messages;
+	if (!Array.isArray(messages)) return "";
+	for (const message of messages) {
+		if (!isObject(message) || message.role !== "user") continue;
+		if (typeof message.content === "string") return message.content;
+		if (!Array.isArray(message.content)) return "";
+		return message.content
+			.filter(
+				(block): block is JsonObject =>
+					isObject(block) && block.type === "text" && typeof block.text === "string",
+			)
+			.map((block) => block.text as string)
+			.join("");
+	}
+	return "";
+}
+
+function extractSessionIdFromMetadata(metadata: unknown): string | undefined {
+	if (!isObject(metadata) || typeof metadata.user_id !== "string")
+		return undefined;
+	const userId = metadata.user_id;
+	if (userId.startsWith("{")) {
+		try {
+			const parsed = JSON.parse(userId) as unknown;
+			if (isObject(parsed) && typeof parsed.session_id === "string") {
+				return parsed.session_id;
+			}
+		} catch {
+			return undefined;
+		}
+	}
+	const marker = "_session_";
+	const index = userId.lastIndexOf(marker);
+	if (index === -1) return undefined;
+	const sessionId = userId.slice(index + marker.length);
+	return sessionId.length > 0 ? sessionId : undefined;
+}
+
+function isBillingSystemBlock(value: unknown): value is { type: string; text: string } {
+	return (
+		isObject(value) &&
+		value.type === "text" &&
+		typeof value.text === "string" &&
+		value.text.startsWith(`${BILLING_HEADER_PREFIX} `)
+	);
+}
+
+/**
+ * Rewrite an OMP Anthropic OAuth payload toward Claude Code SDK-CLI shape.
+ *
+ * OMP already injects Cowork billing + Agent SDK blocks and patches `cch` on the
+ * wire. This only adjusts version/entrypoint text and optional identity metadata
+ * while keeping `system[0]` structure and the `cch=00000` placeholder intact so
+ * OMP's built-in cch attestor still anchors.
+ */
+export async function adjustOmpClaudeCodePayload(
+	payload: unknown,
+	identity: ClaudeCodeIdentity | undefined,
+): Promise<unknown> {
+	if (!isObject(payload) || !Array.isArray(payload.system)) return payload;
+	if (!isBillingSystemBlock(payload.system[0])) return payload;
+
+	const billingText = await buildClaudeCodeBillingHeaderFromPrompt(
+		firstUserPromptFromPayload(payload),
+	);
+	// Mutate in place so sibling object identity stays stable for other hooks.
+	payload.system[0] = {
+		...payload.system[0],
+		text: billingText,
+	};
+
+	if (identity) {
+		const sessionId = extractSessionIdFromMetadata(payload.metadata);
+		if (sessionId) {
+			payload.metadata = {
+				...(isObject(payload.metadata) ? payload.metadata : {}),
+				user_id: JSON.stringify({
+					device_id: identity.deviceId,
+					account_uuid: identity.accountUuid,
+					session_id: sessionId,
+				}),
+			};
+		}
+	}
+
+	return payload;
+}
+
+/** Full payload transform used by tests and any non-OMP host that starts bare. */
 export async function transformClaudeCodePayload(
 	payload: unknown,
-	context: Context,
+	messages: Message[],
 	sessionId: string | undefined,
 	identity: ClaudeCodeIdentity | undefined,
 ): Promise<JsonObject> {
 	if (!isObject(payload))
-		throw new Error("Pi Black expected an Anthropic JSON request object");
+		throw new Error("omp-black expected an Anthropic JSON request object");
 	const existingSystem = Array.isArray(payload.system) ? payload.system : [];
 	const firstSystemText = isObject(existingSystem[0])
 		? existingSystem[0].text
@@ -221,13 +315,13 @@ export async function transformClaudeCodePayload(
 		: undefined;
 	const remainingSystem =
 		typeof firstSystemText === "string" &&
-		firstSystemText.startsWith("x-anthropic-billing-header: ") &&
+		firstSystemText.startsWith(`${BILLING_HEADER_PREFIX} `) &&
 		secondSystemText === AGENT_SDK_SYSTEM_PROMPT
 			? existingSystem.slice(2)
 			: firstSystemText === LEGACY_PI_OAUTH_SYSTEM_PROMPT
 				? existingSystem.slice(1)
 				: existingSystem;
-	const billingHeader = await buildClaudeCodeBillingHeader(context.messages);
+	const billingHeader = await buildClaudeCodeBillingHeader(messages);
 	const transformed: JsonObject = {
 		...payload,
 		system: [
@@ -256,7 +350,7 @@ export function patchClaudeCodeCch(serializedBody: string): string {
 		body = parsed;
 	} catch {
 		throw new Error(
-			"Pi Black expected the Anthropic SDK to serialize a JSON object",
+			"omp-black expected the Anthropic SDK to serialize a JSON object",
 		);
 	}
 	if (
@@ -265,19 +359,19 @@ export function patchClaudeCodeCch(serializedBody: string): string {
 		typeof body.system[0].text !== "string"
 	) {
 		throw new Error(
-			"Pi Black OAuth request is missing the billing system block",
+			"omp-black OAuth request is missing the billing system block",
 		);
 	}
 	const billingText = body.system[0].text;
-	if (!billingText.startsWith("x-anthropic-billing-header: ")) {
-		throw new Error("Pi Black OAuth request has an invalid billing block");
+	if (!billingText.startsWith(`${BILLING_HEADER_PREFIX} `)) {
+		throw new Error("omp-black OAuth request has an invalid billing block");
 	}
 	if (!billingText.includes(CCH_PLACEHOLDER)) {
 		if (/; cch=[0-9a-f]{5};$/u.test(billingText)) return serializedBody;
-		throw new Error("Pi Black OAuth request has an invalid cch billing value");
+		throw new Error("omp-black OAuth request has an invalid cch billing value");
 	}
 	if (typeof body.model !== "string" || !("max_tokens" in body)) {
-		throw new Error("Pi Black OAuth request is missing model or max_tokens");
+		throw new Error("omp-black OAuth request is missing model or max_tokens");
 	}
 
 	const normalized = structuredClone(body);
@@ -290,85 +384,19 @@ export function patchClaudeCodeCch(serializedBody: string): string {
 	return JSON.stringify(body);
 }
 
-function requestHeaders(
-	input: Parameters<FetchFunction>[0],
-	init?: RequestInit,
-): Headers {
-	const headers = new Headers(
-		input instanceof Request ? input.headers : undefined,
-	);
-	if (init?.headers) {
-		for (const [name, value] of new Headers(init.headers))
-			headers.set(name, value);
-	}
-	return headers;
-}
-
-export function createClaudeCodeFetch(
-	fetchImplementation: FetchFunction,
-): FetchFunction {
-	return async (input, init) => {
-		const headers = requestHeaders(input, init);
-		if (!headers.has("x-client-request-id"))
-			headers.set("x-client-request-id", crypto.randomUUID());
-
-		if (typeof init?.body === "string") {
-			return fetchImplementation(input, {
-				...init,
-				headers,
-				body: patchClaudeCodeCch(init.body),
-			});
-		}
-		if (input instanceof Request) {
-			const body = await input.clone().text();
-			const request = new Request(input, {
-				headers,
-				body: patchClaudeCodeCch(body),
-			});
-			return fetchImplementation(request);
-		}
-		throw new Error(
-			"Pi Black OAuth request body is not available for cch patching",
-		);
-	};
-}
-
-export function claudeCodeHeaders(
-	sessionId: string | undefined,
-): ProviderHeaders {
-	return {
-		"user-agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, ${CLAUDE_CODE_ENTRYPOINT})`,
-		"x-app": "cli",
-		...(sessionId ? { "x-claude-code-session-id": sessionId } : {}),
-	};
-}
-
 export function isAnthropicOAuthToken(apiKey: string | undefined): boolean {
 	return apiKey?.includes("sk-ant-oat") === true;
 }
 
-export function mergeClaudeCodeOptions<T extends StreamOptions>(
-	options: T,
-	context: Context,
-	identity:
-		| ClaudeCodeIdentity
-		| undefined
-		| Promise<ClaudeCodeIdentity | undefined>,
-): T {
-	const originalOnPayload = options.onPayload;
-	const transport = options.fetch ?? globalThis.fetch;
-	return {
-		...options,
-		headers: { ...options.headers, ...claudeCodeHeaders(options.sessionId) },
-		fetch: createClaudeCodeFetch(transport),
-		onPayload: async (payload, model) => {
-			const prior = await originalOnPayload?.(payload, model);
-			return transformClaudeCodePayload(
-				prior ?? payload,
-				context,
-				options.sessionId,
-				await identity,
-			);
-		},
-	};
+export function isSupportedOmpVersion(version: string): boolean {
+	const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+	if (!match) return false;
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	const patch = Number(match[3]);
+	if (major !== SUPPORTED_OMP_MAJOR) return false;
+	const [, minMinor, minPatch] = SUPPORTED_OMP_MIN_VERSION.split(".").map(Number);
+	if (minor > minMinor) return true;
+	if (minor < minMinor) return false;
+	return patch >= minPatch;
 }
