@@ -17,7 +17,7 @@ import {
  * - This extension only:
  *   1. Forces Claude Code SDK-CLI User-Agent via provider header override
  *      (OMP honors caller UA when it already starts with `claude-cli`).
- *   2. Rewrites the billing system block to CC 2.1.224 / `sdk-cli`.
+ *   2. Rewrites the billing system block to CC 2.1.258 / `sdk-cli`.
  *   3. Prefers real `~/.claude.json` identity in `metadata.user_id` when present.
  * - Leaves OMP's cch attestor alone (byte-anchored); do not re-serialize bodies.
  */

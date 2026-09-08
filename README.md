@@ -2,7 +2,7 @@
 
 Use your Claude Max (or Pro) subscription with [Oh My Pi](https://omp.sh).
 
-`omp-black` is an unofficial OMP plugin that nudges Anthropic OAuth requests toward Claude Code **2.1.224 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
+`omp-black` is an unofficial OMP plugin that nudges Anthropic OAuth requests toward Claude Code **2.1.258 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
 
 ## Install
 
@@ -26,8 +26,8 @@ OMP already sends Anthropic OAuth traffic with a Cowork-style Claude fingerprint
 
 | Surface | Change |
 |---|---|
-| `User-Agent` | Force `claude-cli/2.1.224 (external, sdk-cli)` (OMP keeps caller UA when it already starts with `claude-cli`) |
-| Billing system block | Rewrite `cc_version` / `cc_entrypoint` to `2.1.224` / `sdk-cli`, keep `cch=00000` placeholder |
+| `User-Agent` | Force `claude-cli/2.1.258 (external, sdk-cli)` (OMP keeps caller UA when it already starts with `claude-cli`) |
+| Billing system block | Rewrite `cc_version` / `cc_entrypoint` to `2.1.258` / `sdk-cli`, keep `cch=00000` placeholder |
 | `metadata.user_id` | When `~/.claude.json` (or `CLAUDE_CONFIG_DIR`) has Claude Code identity, prefer that `device_id` + `account_uuid` |
 | API-key requests | Untouched |
 | Non-Anthropic providers | Untouched |

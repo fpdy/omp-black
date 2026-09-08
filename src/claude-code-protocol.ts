@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
 
 /** Claude Code CLI version whose request shape this package targets. */
-export const CLAUDE_CODE_VERSION = "2.1.224";
+export const CLAUDE_CODE_VERSION = "2.1.258";
 export const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
 export const CLAUDE_CODE_USER_AGENT =
 	`claude-cli/${CLAUDE_CODE_VERSION} (external, ${CLAUDE_CODE_ENTRYPOINT})`;
