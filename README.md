@@ -2,11 +2,13 @@
 
 Use your Claude Max (or Pro) subscription with [Oh My Pi](https://omp.sh).
 
-`omp-black` is an unofficial OMP plugin that nudges Anthropic OAuth requests toward Claude Code **2.1.258 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
+`omp-black` is an unofficial OMP plugin that, on **OMP 17.2.x**, nudges Anthropic OAuth requests toward Claude Code **2.1.258 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
+
+On **OMP 18+** the host already emits a Claude Code CLI fingerprint (`2.1.257` / `cli`). The plugin loads and leaves those requests unchanged, so it does not mix `sdk-cli` billing with a CLI system prompt.
 
 ## Install
 
-Requires OMP **17.2.12+** (same major).
+Requires OMP **17.2.12+**. Rewrite runs only on **17.2.12–17.x**. 18 and newer load as a no-op.
 
 ```sh
 omp plugin install github:fpdy/omp-black
@@ -22,22 +24,23 @@ Then use OMP's normal Anthropic login:
 
 ## What it changes
 
-OMP already sends Anthropic OAuth traffic with a Cowork-style Claude fingerprint (`2.1.220` / `claude-desktop`) and patches the billing `cch` attestation on the wire. This plugin only adjusts the subscription-facing surface:
+OMP 17.2.x sends Anthropic OAuth traffic with a Cowork-style Claude fingerprint (`2.1.220` / `claude-desktop`) and patches the billing `cch` attestation on the wire. On that host this plugin adjusts the subscription-facing surface:
 
-| Surface | Change |
-|---|---|
-| `User-Agent` | Force `claude-cli/2.1.258 (external, sdk-cli)` (OMP keeps caller UA when it already starts with `claude-cli`) |
-| Billing system block | Rewrite `cc_version` / `cc_entrypoint` to `2.1.258` / `sdk-cli`, keep `cch=00000` placeholder |
-| `metadata.user_id` | When `~/.claude.json` (or `CLAUDE_CONFIG_DIR`) has Claude Code identity, prefer that `device_id` + `account_uuid` |
-| API-key requests | Untouched |
-| Non-Anthropic providers | Untouched |
-| `cch` algorithm | Still OMP's built-in in-place attestor (intentionally not reimplemented) |
+| Surface | OMP 17.2.x | OMP 18+ |
+|---|---|---|
+| `User-Agent` | Force `claude-cli/2.1.258 (external, sdk-cli)` | Unchanged (host CLI UA) |
+| Billing system block | Rewrite Cowork `cc_version` / `cc_entrypoint` to `2.1.258` / `sdk-cli`, keep `cch=00000` | Unchanged (`cli` billing is not rewritten) |
+| `metadata.user_id` | When rewriting, and `~/.claude.json` (or `CLAUDE_CONFIG_DIR`) has Claude Code identity, prefer that `device_id` + `account_uuid` | Unchanged |
+| API-key payloads | Billing rewrite skipped (no Cowork block) | Unchanged |
+| API-key `User-Agent` | Also receives the SDK-CLI UA (host cannot scope headers to OAuth) | Unchanged |
+| Non-Anthropic providers | Untouched | Untouched |
+| `cch` algorithm | Still OMP's built-in in-place attestor | Host attestor only |
 
 Credential storage, OAuth refresh, tools, retries, streaming, and usage accounting stay in OMP.
 
 ## Identity discovery
 
-No identity environment variables are required. When Claude Code state exists, omp-black reads the installation ID and account UUID from `~/.claude.json` in memory and merges them into request metadata. It does not copy, print, or persist those values. Routing still runs when that optional metadata is unavailable.
+No identity environment variables are required. On 17.x, when Claude Code state exists and the payload is being rewritten, omp-black reads the installation ID and account UUID from `~/.claude.json` in memory and merges them into request metadata. It does not copy, print, or persist those values. Routing still runs when that optional metadata is unavailable.
 
 ## Verify
 

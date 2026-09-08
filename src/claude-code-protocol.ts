@@ -9,9 +9,13 @@ export const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
 export const CLAUDE_CODE_USER_AGENT =
 	`claude-cli/${CLAUDE_CODE_VERSION} (external, ${CLAUDE_CODE_ENTRYPOINT})`;
 
-/** Soft-compat floor for the host OMP coding-agent. */
+/**
+ * Rewrite-capable host floor. OMP 17.2.12–17.x emit a Cowork fingerprint
+ * (`claude-desktop`); 18+ already emit the CLI fingerprint and must not be rewritten.
+ */
 export const SUPPORTED_OMP_MAJOR = 17;
 export const SUPPORTED_OMP_MIN_VERSION = "17.2.12";
+export const COWORK_ENTRYPOINT = "claude-desktop";
 
 const CCH_PLACEHOLDER = "cch=00000";
 const CCH_SEED = 0x4d659218e32a3268n;
@@ -128,10 +132,10 @@ function firstUserPrompt(messages: Message[]): string {
 	for (const message of messages) {
 		if (message.role !== "user") continue;
 		if (typeof message.content === "string") return message.content;
-		return message.content
-			.filter((block) => block.type === "text")
-			.map((block) => block.text)
-			.join("");
+		for (const block of message.content) {
+			if (block.type === "text") return block.text;
+		}
+		return "";
 	}
 	return "";
 }
@@ -215,13 +219,16 @@ function firstUserPromptFromPayload(payload: JsonObject): string {
 		if (!isObject(message) || message.role !== "user") continue;
 		if (typeof message.content === "string") return message.content;
 		if (!Array.isArray(message.content)) return "";
-		return message.content
-			.filter(
-				(block): block is JsonObject =>
-					isObject(block) && block.type === "text" && typeof block.text === "string",
-			)
-			.map((block) => block.text as string)
-			.join("");
+		for (const block of message.content) {
+			if (
+				isObject(block) &&
+				block.type === "text" &&
+				typeof block.text === "string"
+			) {
+				return block.text;
+			}
+		}
+		return "";
 	}
 	return "";
 }
@@ -256,13 +263,16 @@ function isBillingSystemBlock(value: unknown): value is { type: string; text: st
 	);
 }
 
+function isCoworkBillingText(text: string): boolean {
+	return text.includes(`; cc_entrypoint=${COWORK_ENTRYPOINT};`);
+}
+
 /**
- * Rewrite an OMP Anthropic OAuth payload toward Claude Code SDK-CLI shape.
+ * Rewrite a Cowork-shaped OMP Anthropic OAuth payload toward Claude Code SDK-CLI.
  *
- * OMP already injects Cowork billing + Agent SDK blocks and patches `cch` on the
- * wire. This only adjusts version/entrypoint text and optional identity metadata
- * while keeping `system[0]` structure and the `cch=00000` placeholder intact so
- * OMP's built-in cch attestor still anchors.
+ * Only `cc_entrypoint=claude-desktop` billing is rewritten. CLI (`cli`) and
+ * already-transformed `sdk-cli` payloads are left untouched so OMP 18+'s
+ * fingerprint is not mixed. `cch=00000` stays so the host attestor still anchors.
  */
 export async function adjustOmpClaudeCodePayload(
 	payload: unknown,
@@ -270,6 +280,7 @@ export async function adjustOmpClaudeCodePayload(
 ): Promise<unknown> {
 	if (!isObject(payload) || !Array.isArray(payload.system)) return payload;
 	if (!isBillingSystemBlock(payload.system[0])) return payload;
+	if (!isCoworkBillingText(payload.system[0].text)) return payload;
 
 	const billingText = await buildClaudeCodeBillingHeaderFromPrompt(
 		firstUserPromptFromPayload(payload),
@@ -388,6 +399,7 @@ export function isAnthropicOAuthToken(apiKey: string | undefined): boolean {
 	return apiKey?.includes("sk-ant-oat") === true;
 }
 
+/** True when this host should rewrite Cowork traffic (OMP 17.2.12–17.x). */
 export function isSupportedOmpVersion(version: string): boolean {
 	const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
 	if (!match) return false;

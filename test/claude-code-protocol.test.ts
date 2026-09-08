@@ -8,6 +8,7 @@ import {
 	buildClaudeCodeBillingHeader,
 	CLAUDE_CODE_VERSION,
 	claudeCodeVersionFingerprint,
+	claudeCodeVersionFingerprintFromPrompt,
 	discoverClaudeCodeIdentity,
 	isSupportedOmpVersion,
 	parseClaudeCodeIdentity,
@@ -211,12 +212,35 @@ describe("Claude Code protocol", () => {
 		expect(patchClaudeCodeCch(body)).toBe(body);
 	});
 
-	it("accepts supported OMP versions and rejects other majors", () => {
+	it("activates rewrite only on OMP 17.2.12–17.x", () => {
 		expect(isSupportedOmpVersion("17.2.12")).toBe(true);
 		expect(isSupportedOmpVersion("17.3.0")).toBe(true);
 		expect(isSupportedOmpVersion("17.2.11")).toBe(false);
 		expect(isSupportedOmpVersion("16.9.9")).toBe(false);
 		expect(isSupportedOmpVersion("18.0.0")).toBe(false);
+		expect(isSupportedOmpVersion("18.1.14")).toBe(false);
+	});
+
+	it("fingerprints only the first text block of the first user message", async () => {
+		const firstBlock = "Hi";
+		const expected = await claudeCodeVersionFingerprintFromPrompt(firstBlock);
+		expect(
+			await claudeCodeVersionFingerprint([
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: firstBlock },
+						{ type: "text", text: "Reply with exactly: PROBE_OK" },
+					],
+					timestamp: 1,
+				},
+			]),
+		).toBe(expected);
+		expect(expected).not.toBe(
+			await claudeCodeVersionFingerprintFromPrompt(
+				`${firstBlock}Reply with exactly: PROBE_OK`,
+			),
+		);
 	});
 });
 
@@ -300,5 +324,69 @@ describe("OMP payload adjuster", () => {
 		)) as typeof payload;
 		expect(adjusted.system[0].text).toContain("cch=00000");
 		expect(adjusted.system[0].text).toContain("cc_entrypoint=sdk-cli");
+	});
+
+	it("leaves OMP 18 CLI billing and identity untouched", async () => {
+		const payload = {
+			model: "claude-sonnet-4-5",
+			messages: [{ role: "user", content: "Reply with exactly: PROBE_OK" }],
+			max_tokens: 1024,
+			stream: true,
+			system: [
+				{
+					type: "text",
+					text: "x-anthropic-billing-header: cc_version=2.1.257.abc; cc_entrypoint=cli; cch=00000;",
+				},
+				{
+					type: "text",
+					text: "You are Claude Code, Anthropic's official CLI for Claude.",
+					cache_control: { type: "ephemeral" },
+				},
+			],
+			metadata: {
+				user_id: JSON.stringify({
+					device_id: "a".repeat(64),
+					session_id: "11111111-2222-4333-8444-555555555555",
+				}),
+			},
+		};
+		const adjusted = await adjustOmpClaudeCodePayload(payload, {
+			deviceId,
+			accountUuid,
+		});
+		expect(adjusted).toBe(payload);
+		expect(adjusted).toEqual(payload);
+	});
+
+	it("seeds Cowork billing from the first user text block only", async () => {
+		const firstBlock = "Hi";
+		const fingerprint =
+			await claudeCodeVersionFingerprintFromPrompt(firstBlock);
+		const payload = {
+			model: "claude-sonnet-4-5",
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: firstBlock },
+						{ type: "text", text: "Reply with exactly: PROBE_OK" },
+					],
+				},
+			],
+			max_tokens: 16,
+			system: [
+				{
+					type: "text",
+					text: "x-anthropic-billing-header: cc_version=2.1.220.000; cc_entrypoint=claude-desktop; cch=00000;",
+				},
+			],
+		};
+		const adjusted = (await adjustOmpClaudeCodePayload(
+			payload,
+			undefined,
+		)) as typeof payload;
+		expect(adjusted.system[0].text).toBe(
+			`x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${fingerprint}; cc_entrypoint=sdk-cli; cch=00000;`,
+		);
 	});
 });
