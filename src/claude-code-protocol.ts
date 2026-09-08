@@ -263,8 +263,14 @@ function isBillingSystemBlock(value: unknown): value is { type: string; text: st
 	);
 }
 
+function billingEntrypoint(text: string): string | undefined {
+	const match = /(?:^|[;\s])cc_entrypoint=([^;]+)/u.exec(text);
+	const value = match?.[1]?.trim();
+	return value && value.length > 0 ? value : undefined;
+}
+
 function isCoworkBillingText(text: string): boolean {
-	return text.includes(`; cc_entrypoint=${COWORK_ENTRYPOINT};`);
+	return billingEntrypoint(text) === COWORK_ENTRYPOINT;
 }
 
 /**

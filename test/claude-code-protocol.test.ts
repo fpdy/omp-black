@@ -326,6 +326,28 @@ describe("OMP payload adjuster", () => {
 		expect(adjusted.system[0].text).toContain("cc_entrypoint=sdk-cli");
 	});
 
+	it("rewrites Cowork billing when the entrypoint is last or tightly spaced", async () => {
+		const fingerprint = await claudeCodeVersionFingerprintFromPrompt("hello");
+		const expected = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${fingerprint}; cc_entrypoint=sdk-cli; cch=00000;`;
+		for (const text of [
+			"x-anthropic-billing-header: cc_version=2.1.220.000; cc_entrypoint=claude-desktop",
+			"x-anthropic-billing-header: cc_entrypoint=claude-desktop; cc_version=2.1.220.000; cch=00000;",
+			"x-anthropic-billing-header: cc_version=2.1.220.000;cc_entrypoint=claude-desktop;cch=00000;",
+		]) {
+			const payload = {
+				model: "claude-sonnet-4-5",
+				messages: [{ role: "user", content: "hello" }],
+				max_tokens: 16,
+				system: [{ type: "text", text }],
+			};
+			const adjusted = (await adjustOmpClaudeCodePayload(
+				payload,
+				undefined,
+			)) as typeof payload;
+			expect(adjusted.system[0].text).toBe(expected);
+		}
+	});
+
 	it("leaves OMP 18 CLI billing and identity untouched", async () => {
 		const payload = {
 			model: "claude-sonnet-4-5",
