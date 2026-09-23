@@ -18,7 +18,7 @@ import {
  *   This extension then:
  *   1. Forces Claude Code SDK-CLI User-Agent via provider header override
  *      (OMP honors caller UA when it already starts with `claude-cli`).
- *   2. Rewrites Cowork billing (`claude-desktop`) to CC 2.1.258 / `sdk-cli`.
+ *   2. Rewrites Cowork billing (`claude-desktop`) to CC 2.1.280 / `sdk-cli`.
  *   3. Prefers real `~/.claude.json` identity in `metadata.user_id` when present.
  * - OMP 18+ already emits the CLI fingerprint; do not rewrite or override UA.
  * - Leaves OMP's cch attestor alone (byte-anchored); do not re-serialize bodies.
