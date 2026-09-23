@@ -46,13 +46,13 @@ describe("Claude Code protocol", () => {
 			await claudeCodeVersionFingerprint(
 				promptMessages("Reply with exactly: PROBE_OK"),
 			),
-		).toBe("01c");
+		).toBe("022");
 		expect(
 			await buildClaudeCodeBillingHeader(
 				promptMessages("Reply with exactly: PROBE_OK"),
 			),
 		).toBe(
-			`x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.01c; cc_entrypoint=sdk-cli; cch=00000;`,
+			`x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.022; cc_entrypoint=sdk-cli; cch=00000;`,
 		);
 	});
 
@@ -100,7 +100,7 @@ describe("Claude Code protocol", () => {
 		const system = payload.system as Array<Record<string, unknown>>;
 		expect(system[0]).toEqual({
 			type: "text",
-			text: `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.01c; cc_entrypoint=sdk-cli; cch=00000;`,
+			text: `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.022; cc_entrypoint=sdk-cli; cch=00000;`,
 		});
 		expect(system[1]).toEqual({
 			type: "text",
@@ -278,7 +278,7 @@ describe("OMP payload adjuster", () => {
 		})) as typeof payload;
 
 		expect(adjusted.system[0].text).toBe(
-			`x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.01c; cc_entrypoint=sdk-cli; cch=00000;`,
+			`x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.022; cc_entrypoint=sdk-cli; cch=00000;`,
 		);
 		expect(adjusted.system[1]).toEqual(payload.system[1]);
 		expect(adjusted.system[2]).toEqual(payload.system[2]);

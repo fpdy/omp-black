@@ -2,7 +2,7 @@
 
 Use your Claude Max (or Pro) subscription with [Oh My Pi](https://omp.sh).
 
-`omp-black` is an unofficial OMP plugin that, on **OMP 17.2.x**, nudges Anthropic OAuth requests toward Claude Code **2.1.258 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
+`omp-black` is an unofficial OMP plugin that, on **OMP 17.2.x**, nudges Anthropic OAuth requests toward Claude Code **2.1.280 / `sdk-cli`** request conventions so subscription routing can apply. It does **not** replace OMP's Anthropic transport.
 
 On **OMP 18+** the host already emits a Claude Code CLI fingerprint (`2.1.257` / `cli`). The plugin loads and leaves those requests unchanged, so it does not mix `sdk-cli` billing with a CLI system prompt.
 
@@ -28,8 +28,8 @@ OMP 17.2.x sends Anthropic OAuth traffic with a Cowork-style Claude fingerprint 
 
 | Surface | OMP 17.2.x | OMP 18+ |
 |---|---|---|
-| `User-Agent` | Force `claude-cli/2.1.258 (external, sdk-cli)` | Unchanged (host CLI UA) |
-| Billing system block | Rewrite Cowork `cc_version` / `cc_entrypoint` to `2.1.258` / `sdk-cli`, keep `cch=00000` | Unchanged (`cli` billing is not rewritten) |
+| `User-Agent` | Force `claude-cli/2.1.280 (external, sdk-cli)` | Unchanged (host CLI UA) |
+| Billing system block | Rewrite Cowork `cc_version` / `cc_entrypoint` to `2.1.280` / `sdk-cli`, keep `cch=00000` | Unchanged (`cli` billing is not rewritten) |
 | `metadata.user_id` | When rewriting, and `~/.claude.json` (or `CLAUDE_CONFIG_DIR`) has Claude Code identity, prefer that `device_id` + `account_uuid` | Unchanged |
 | API-key payloads | Billing rewrite skipped (no Cowork block) | Unchanged |
 | API-key `User-Agent` | Also receives the SDK-CLI UA (host cannot scope headers to OAuth) | Unchanged |
